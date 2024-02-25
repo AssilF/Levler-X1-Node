@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
+#include <WebSocketsServer.h>
 #include <ESP8266TimerInterrupt.h> //some amazing man gave us this on github to compensate for the terribly designed timers on esp8266 . . . why is this unit this expensive comparing to esp32s price anyways >:( 
 #include <SPI.h>
 #include <Adafruit_GFX.h>
@@ -18,22 +19,97 @@
 #define TFT_RST   D2     // TFT RST pin is connected to NodeMCU pin D2 (GPIO4)
 #define TFT_CS    D8     // TFT CS  pin is connected to NodeMCU pin D8 (GPIO15)
 
+//concerning coms:
+IPAddress local_IP(4,4,4,100);
+IPAddress gateway(4,4,4,100);
+IPAddress subnet(255,255,255,0);
+const char* ssid     = "Levler@1";
+const char* password = "ASCE-123#";
+
 //Bismilah
 //Concerning Objects
 Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS,TFT_DC,TFT_RST);
 
+WebSocketsServer webSocket = WebSocketsServer(80);
+
 
 //Concerning Pins:
+#define indicator D0
 
 //Concerning Functions = = = = = = = = = = = = = = = = = = = = = = = ======================
-//Concerning Actions
+//Concerning indication
+#define wink(intensity) analogWrite(indicator,intensity)
+#define indication_sets_width 6
 
+//LED indication
+#define indicate_offline
+#define indicate_disconnection
+#define indicate_connection
+#define indicate_transmission
+#define indicate_reception
+#define indicate_error
+
+int blinkMillis[][indication_sets_width] 
+{
+    {0},
+    {0}, //disconnected
+    {100,100,200,200,100,100},//connected
+    {400,100,600,300}, //transmission
+    {0}, //reception
+    {0} //error
+};
+int blinkIntensities[][indication_sets_width]
+{
+    {0},//offline
+    {0},//disconnected
+    {200,800,2000,800,200,0},//connected
+    {20,0,100,0},//transmission
+    {0},//reception
+    {0}//error
+}; //currently, we're not concerned with stuff other than connection status so. . . audio will do the rest.
+int blinkPriorities[]
+{
+};
+int blinkDefaults[]
+{
+};
+
+int blinkIndex;
+byte blinkMode;
+unsigned long blinkInstance;
+
+void blink(byte blinkStyle)
+{
+    if(blinkStyle != blinkMode)
+    {
+        blinkMode = blinkStyle;
+        blinkIndex = 0;
+    }
+}
+
+void performBlink()
+{
+        if(millis()-blinkInstance>= blinkMillis[blinkMode][blinkIndex])
+        {
+            wink(blinkIntensities[blinkMode][blinkIndex]);
+            blinkIndex>4?blinkIndex=0:blinkIndex++;
+            blinkInstance=millis();
+        }
+}
 
 
 
 
 //Concerning Video
 //Video core:
+#define vertical_divisions 4
+#define horizontal_divisions 5
+
+void divideMenu()
+{
+
+}
+
 
 
 
@@ -181,19 +257,86 @@ void performAudioFeedback()
 
 
 //Concerning Coms:
+uint8_t coms_status; //if I'd ever need to do something with a coms Flag
+uint8_t precoms_status;
+#define cStatus_offline 0
+#define cStatus_disconnected 1
+#define cStatus_connected 2
+#define cStatus_transmission 3
+#define cStatus_Reception 4
+#define cStatus_Error 5
+String msgBuffer;
+int msgBufferIndex;
+int entryIndex;
 
+void socketEvent(uint8_t num,WStype_t type,uint8_t *payload,size_t length) //note: payload pointer appears to be of 8 bits, meaning this may have constrains if not used properly. just a thought of mine :)
+{
+        switch(type) //do stuff based on the socket events, that the library somewhat handles for us already
+        {
+            case WStype_DISCONNECTED:
+            play_audio(audio_disconnected);
+            coms_status=cStatus_disconnected; 
+            precoms_status = coms_status;
+            break;
 
+            case WStype_CONNECTED:
+            play_audio(audio_connected);
+            coms_status=cStatus_connected;
+            precoms_status = coms_status;
+            // Serial.println(webSocket.remoteIP(num).toString());
+            break;
+
+            case WStype_ERROR:
+            play_audio(audio_fail);
+            coms_status = cStatus_Error;
+            break;
+
+            case WStype_TEXT:
+            play_audio(audio_webCMD); //for debug purposes, since we won't be sending text I guess.
+            coms_status=cStatus_Reception;
+            msgBuffer = String((char *)payload);
+
+            Serial.println(msgBuffer);
+
+            tft.println(msgBuffer);
+
+            if(msgBuffer.length()>=2)
+            {
+                if(msgBuffer.substring(0,2).equals("ss"))
+                {
+                    tft.fillScreen(ST77XX_BLUE);
+                }
+            }
+        }
+}
 
 
 //
 
 void setup() {
+
+    Serial.begin(115200);
+
+
+    WiFi.softAPConfig(local_IP, gateway, subnet);
+    WiFi.softAP(ssid,password,2,0,4);
+
+    pinMode(indicator,OUTPUT);
+    digitalWrite(indicator,1);
+
+    blink(3);
+
+    webSocket.begin(); //initiate the websocket only when there's connectivity, save resources otherwise.
+    webSocket.onEvent(socketEvent);
+
     tft.init(240, 240, SPI_MODE2);
     tft.setRotation(2);
     tft.fillScreen(ST77XX_BLACK);
+    tft.print("All booten'n good");
 }
 
 void loop() {
-
+    webSocket.loop();
+    performBlink();
 }
 
