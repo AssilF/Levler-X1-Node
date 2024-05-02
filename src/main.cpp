@@ -5,6 +5,9 @@
 #include <SPI.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_ST7789.h>
+#include <FS.h>
+#include <LittleFS.h>
+
 
 //Note: For the analog pins since we have only one analog interface, we're gonna use an analog multiplexer I guess. . . let's hope it doesn't interfere with the US readings . . .
 
@@ -16,8 +19,8 @@
 #define SCR_WD   240
 #define SCR_HT   240
 #define TFT_DC    D1     // TFT DC  pin is connected to NodeMCU pin D1 (GPIO5)
-#define TFT_RST   D2     // TFT RST pin is connected to NodeMCU pin D2 (GPIO4)
-#define TFT_CS    D8     // TFT CS  pin is connected to NodeMCU pin D8 (GPIO15)
+#define TFT_RST   D6     // TFT RST pin is connected to NodeMCU pin D2 (GPIO4)
+#define TFT_CS    -1     // TFT CS  pin is connected to NodeMCU pin D8 (GPIO15)
 
 //concerning coms:
 IPAddress local_IP(4,4,4,100);
@@ -34,93 +37,21 @@ WebSocketsServer webSocket = WebSocketsServer(80);
 
 
 //Concerning Pins:
-#define indicator D0
-
-//Concerning Functions = = = = = = = = = = = = = = = = = = = = = = = ======================
-//Concerning indication
-#define wink(intensity) analogWrite(indicator,intensity)
-#define indication_sets_width 6
-
-//LED indication
-#define indicate_offline
-#define indicate_disconnection
-#define indicate_connection
-#define indicate_transmission
-#define indicate_reception
-#define indicate_error
-
-int blinkMillis[][indication_sets_width] 
-{
-    {0},
-    {0}, //disconnected
-    {100,100,200,200,100,100},//connected
-    {400,100,600,300}, //transmission
-    {0}, //reception
-    {0} //error
-};
-int blinkIntensities[][indication_sets_width]
-{
-    {0},//offline
-    {0},//disconnected
-    {200,800,2000,800,200,0},//connected
-    {20,0,100,0},//transmission
-    {0},//reception
-    {0}//error
-}; //currently, we're not concerned with stuff other than connection status so. . . audio will do the rest.
-int blinkPriorities[]
-{
-};
-int blinkDefaults[]
-{
-};
-
-int blinkIndex;
-byte blinkMode;
-unsigned long blinkInstance;
-
-void blink(byte blinkStyle)
-{
-    if(blinkStyle != blinkMode)
-    {
-        blinkMode = blinkStyle;
-        blinkIndex = 0;
-    }
-}
-
-void performBlink()
-{
-        if(millis()-blinkInstance>= blinkMillis[blinkMode][blinkIndex])
-        {
-            wink(blinkIntensities[blinkMode][blinkIndex]);
-            blinkIndex>4?blinkIndex=0:blinkIndex++;
-            blinkInstance=millis();
-        }
-}
-
-
-
-
-//Concerning Video
-//Video core:
-#define vertical_divisions 4
-#define horizontal_divisions 5
-
-void divideMenu()
-{
-
-}
-
-
-
-
-
-
-
-
+#define indicator LED_BUILTIN
+#define LBtn D3
+#define RBtn 3
+#define OKBtn D2
+#define Reset_Hold_Pin 1
+#define Buzzer D8
+#define Bat A0
 
 //Concerning Audio  
 //Audio Core
-#define sound(freq) 
+int Audio_Freq;
+
+//#define sound(freq) (Audio_Freq=freq)
+
+#define sound(freq) tone(Buzzer, freq)
 
 #define sound_partitions 6
 #define sound_IDs 16
@@ -240,25 +171,256 @@ void performAudioFeedback()
             if(sound_partition_index>sound_set_width[sound_ID]){isSounding=0;}
     }else
     {
-        sound(0);
+        //sound(0);
+        noTone(Buzzer);
         audioConflict=1;
+    }
+}
+
+unsigned int Audio_Millis;
+bool buzzerState;
+void performTone()
+{
+    if(Audio_Freq==0){
+        digitalWrite(Buzzer,0);
+    }else{
+    if(millis() - Audio_Millis >= 1/(Audio_Freq*2))
+    {
+        buzzerState= !buzzerState;
+        digitalWrite(Buzzer,buzzerState);
+    }
     }
 }
 
 
 
+//Concerning Feedback
+double Temp;
+double EchoTime;
+double Humidity;
+bool hatch;
+
+//Concerning Menu and Actions:
+byte sensor_action_mode;
+byte alarm_dur; //figure out what else later on
 
 
+//Concerning Display Menu:
+int page_index;
+int element_index; 
 
 
+//Concerning IO:              =========> This is a polling solution, away from interrupts as I Wanna reserve them for wifi stuff (low frequency and limited battery give us some desperate times :))
+// volatile bool OKBtn_s;
+// volatile bool LBtn_s;
+// volatile bool RBtn_s; //I don't wanna use enums to keep things simple here.  . .
 
-//Concerning IO:              =========Currently, the system is mainly 
+// #define pressed 1
+// #define held_down 2
+// #define released 3
 
+// volatile byte LB_State;
+// volatile byte RB_State;
+// volatile byte OK_State;
+
+// unsigned int ButtonClock;
+// byte button_count;
+
+// #define okB digitalRead(OKBtn)
+// #define leftB digitalRead(LBtn)
+// #define rigthB digitalRead(RBtn)
+
+//volatile bool actFlag=0; //The fetch function can be broken into 3 parts for each pin and turned into an ISR to save power, however, this may introduce unpredictable wifi behaviour which may in turn toss energy around, this is just a theory though so, determining this later on if I liberate enough time for this project
+
+
+//No longer used (Polling mode)
+// void fetchInputs() //I am not gonna focus on optimizing this code so much because time is running out for the rest of this project, COMS and SENSING
+// {
+    
+//     if(millis()-ButtonClock>=80){
+
+//     if(digitalRead(OKBtn)!=OKBtn_s)
+//     {
+//         if(okB)
+//         {
+//         OK_State=released;
+//         actFlag = 0;
+//         }else
+//         {
+//         OK_State=pressed;
+//         actFlag = 1;
+//         }
+
+//         OKBtn_s=okB;
+        
+//     }else
+//     {
+//         if(actFlag)
+//         {
+//             if(button_count>=7){
+//             OK_State=held_down;}
+//         }else
+//         {
+//             OK_State=0;
+//         }
+//     }
+
+
+//     if(digitalRead(LBtn)!=RBtn_s)
+//     {
+//         if(rigthB)
+//         {
+//         RB_State=released;
+//         actFlag = 0;
+//         }else
+//         {
+//         RB_State=pressed;    
+//         actFlag = 1;
+//         }
+
+//         RBtn_s=rigthB;
+//     }else
+//     {
+//         if(actFlag)
+//         {   
+//             if(button_count>=7){
+//             RB_State=held_down;}
+//         }else
+//         {
+//             RB_State=0;
+//         }
+//     }
+
+
+//     if(digitalRead(RBtn)!=LBtn_s)
+//     {
+//         if(leftB)
+//         {
+//         LB_State=released;
+//         actFlag = 0;
+//         button_count=0;
+//         }else
+//         {
+//         LB_State=pressed;
+//         actFlag = 1;
+//         }
+//         LBtn_s=leftB;
+//     }else
+//     {
+        
+//         if(actFlag)
+//         {
+//             if(button_count>=7){
+//             LB_State=held_down;}
+//         }else
+//         {
+//             LB_State=0;
+//         }
+        
+//     }
+
+//     button_count>7?button_count=0:button_count++;
+//     ButtonClock = millis();
+//     }
+// }
+
+
+// unsigned long fetchMillis;
+// unsigned long fetchInterval = 500;
+
+// // int okBtnCNT;
+// // int leftBtnCNT;
+// // int rightBtnCNT;
+
+// volatile unsigned long lMillis;
+// volatile unsigned long rMillis;
+// volatile unsigned long okMillis;
+
+// ICACHE_RAM_ATTR void OKISR()
+// {   
+//     if(millis()-okMillis>=20){
+//     actFlag=1;
+//     if(okB){OK_State=released;}else{ OK_State=pressed;OKBtn_s=1;}
+
+//     okMillis=millis();
+//     }
+// }
+
+// ICACHE_RAM_ATTR void LISR()
+// {
+//     if(millis()-lMillis>=20){
+//     actFlag=1;
+//     if(leftB){LB_State=released;} else{LB_State=pressed;LBtn_s=1;}
+//     lMillis=millis();
+//     }
+// }
+
+// ICACHE_RAM_ATTR void RISR()
+// {
+//     if(millis()-rMillis>=20){
+//     actFlag=1;
+//     if(rigthB){RB_State=released;}else{ RB_State=pressed;RBtn_s=1;}
+//     rMillis=millis();
+//     }
+// }
+
+
+// void fetchPresses()
+// {
+
+//     if(actFlag)
+//     {
+//         actFlag=0;
+//         fetchMillis=millis();
+//         fetchInterval=1000;
+//     }
+
+//     if(millis()-fetchMillis>=fetchInterval)
+//     {
+//     fetchMillis=millis();
+//     fetchInterval=100;
+
+//     if(OKBtn_s && !okB)
+//     {
+//         OK_State=held_down;
+//     }
+
+//     if(RBtn_s && !rigthB)
+//     {
+//         RB_State=held_down;
+//     }
+
+//     if(LBtn_s&& !leftB)
+//     {
+//         LB_State=held_down;
+//     }
+//     }
+
+// }
+
+//Redoing a less cpu intensive IO system:
+
+byte ok_count;
+byte right_count;
+byte left_count;
+
+ICACHE_RAM_ATTR void OKISR(){ok_count++;} //we could reset the fetch timer here for convenience but like.  .  . cpu is weak man...
+ICACHE_RAM_ATTR void LISR(){left_count++;}
+ICACHE_RAM_ATTR void RISR(){right_count++;}
+
+unsigned long pressMillis;
+
+void fetchIO() //you have 350ms to repress the button ;)
+{
+    if(millis()-pressMillis>=400)
+    {
+
+    }
+}
 
 
 //Concerning Coms:
 uint8_t coms_status; //if I'd ever need to do something with a coms Flag
-uint8_t precoms_status;
 #define cStatus_offline 0
 #define cStatus_disconnected 1
 #define cStatus_connected 2
@@ -269,6 +431,8 @@ String msgBuffer;
 int msgBufferIndex;
 int entryIndex;
 
+//Check if connected or not, if not, let the message to be sent on standby until connection is established again, if the sensor echoes back, move on.
+
 void socketEvent(uint8_t num,WStype_t type,uint8_t *payload,size_t length) //note: payload pointer appears to be of 8 bits, meaning this may have constrains if not used properly. just a thought of mine :)
 {
         switch(type) //do stuff based on the socket events, that the library somewhat handles for us already
@@ -276,13 +440,11 @@ void socketEvent(uint8_t num,WStype_t type,uint8_t *payload,size_t length) //not
             case WStype_DISCONNECTED:
             play_audio(audio_disconnected);
             coms_status=cStatus_disconnected; 
-            precoms_status = coms_status;
             break;
 
             case WStype_CONNECTED:
             play_audio(audio_connected);
             coms_status=cStatus_connected;
-            precoms_status = coms_status;
             // Serial.println(webSocket.remoteIP(num).toString());
             break;
 
@@ -297,7 +459,7 @@ void socketEvent(uint8_t num,WStype_t type,uint8_t *payload,size_t length) //not
             msgBuffer = String((char *)payload);
 
             Serial.println(msgBuffer);
-
+            webSocket.sendTXT(num, "200.00");
             tft.println(msgBuffer);
 
             if(msgBuffer.length()>=2)
@@ -310,33 +472,208 @@ void socketEvent(uint8_t num,WStype_t type,uint8_t *payload,size_t length) //not
         }
 }
 
+//Concerning Functions = = = = = = = = = = = = = = = = = = = = = = = ======================
+//Concerning indication
+#define wink(intensity) analogWrite(indicator,intensity)
+#define indication_sets_width 6
 
-//
+//LED indication
+#define indicate_offline
+#define indicate_disconnection
+#define indicate_connection
+#define indicate_transmission
+#define indicate_reception
+#define indicate_error
+
+int blinkMillis[][indication_sets_width] 
+{
+    {0},
+    {0}, //disconnected
+    {100,100,200,200,100,100},//connected
+    {400,100,600,300}, //transmission
+    {0}, //reception
+    {0} //error
+};
+int blinkIntensities[][indication_sets_width]
+{
+    {0},//offline
+    {0},//disconnected
+    {200,800,2000,4000,500,0},//connected
+    {20,0,100,0},//transmission
+    {0},//reception
+    {0}//error
+}; //currently, we're not concerned with stuff other than connection status so. . . audio will do the rest.
+int blinkPriorities[]
+{
+};
+int blinkDefaults[]
+{
+};
+
+int blinkIndex;
+byte blinkMode;
+unsigned long blinkInstance;
+
+void blink(byte blinkStyle, byte blinkEase)
+{
+    if(blinkStyle != blinkMode)
+    {
+        blinkMode = blinkStyle;
+        blinkIndex = 0;
+    }
+}
+
+void performBlink()
+{
+        if(millis()-blinkInstance>= blinkMillis[blinkMode][blinkIndex])
+        {
+            wink(blinkIntensities[blinkMode][blinkIndex]);
+            blinkIndex>4?blinkIndex=0:blinkIndex++;
+            blinkInstance=millis();
+        }
+}
+
+
+//Concerning Video
+//Video core:
+#define vertical_divisions 4
+#define horizontal_divisions 5
+#define white ST77XX_WHITE
+#define white2 0xe7fc
+#define lime 0x07e0
+#define green 0x1346
+#define cyan ST77XX_CYAN
+#define blue 0x0c10
+#define lime2 0xd7f0
+#define black ST77XX_BLACK
+
+void divideMenu()
+{
+    tft.drawFastVLine(180,45,195,green);
+    tft.drawFastHLine(0,90,240,green);
+    tft.drawFastHLine(180,135,60,green);
+    tft.drawFastHLine(180,180,60,green);
+    tft.drawFastHLine(180,225,60,green);
+    tft.fillRect(0,90,180,150,white2);
+}
+
+void drawButtons()
+{
+    if(page_index==0){
+    tft.fillRect(0,0,240,45,lime);
+    switch (element_index)
+    {
+    case 0:
+        tft.fillRoundRect(4,5,75,42,4,lime2);
+        tft.setCursor(7,8); tft.print("Settings");
+        tft.fillRoundRect(85,4,70,38,3,white);
+        tft.setCursor(92,8); tft.print("Overview");
+        tft.fillRoundRect(160,4,70,38,3,white);
+        tft.setCursor(167,8); tft.print("Control");
+    break;
+    case 1:
+        tft.fillRoundRect(4,4,70,38,6,white);
+        tft.setCursor(6,8); tft.print("Settings");
+        tft.fillRoundRect(80,5,75,42,4,lime2);
+        tft.setCursor(87,8); tft.print("Overview");
+        tft.fillRoundRect(160,4,70,38,6,white);
+        tft.setCursor(167,8); tft.print("Control");
+    break;
+    case 2:
+        tft.fillRoundRect(4,4,70,38,6,white);
+        tft.setCursor(6,8); tft.print("Settings");
+        tft.fillRoundRect(80,4,70,38,6,white);
+        tft.setCursor(87,8); tft.print("Overview");
+        tft.fillRoundRect(155,5,75,42,4,lime2);
+        tft.setCursor(162,8); tft.print("Control");
+    break;
+    }
+    
+    }
+}
+
+void drawIcons()
+{
+
+}
+
+
+void renderGraphics()
+{
+
+}
+
+void Hibernate() //save all the important states before hibernating//
+{
+    ESP.deepSleep(5e6);
+    yield();
+}
+
+void Wake()
+{
+
+}
+
 
 void setup() {
 
-    Serial.begin(115200);
-
-
+    //Wifi Init:
     WiFi.softAPConfig(local_IP, gateway, subnet);
     WiFi.softAP(ssid,password,2,0,4);
 
     pinMode(indicator,OUTPUT);
-    digitalWrite(indicator,1);
+    pinMode(OKBtn,INPUT_PULLUP);
+    pinMode(RBtn, FUNCTION_3);
+    pinMode(RBtn,INPUT_PULLUP);
+    pinMode(LBtn,INPUT_PULLUP);
+    pinMode(Buzzer,OUTPUT);
 
-    blink(3);
+    //Hold the sleep.
+    pinMode(Reset_Hold_Pin, FUNCTION_3);
+    pinMode(Reset_Hold_Pin, OUTPUT);
+    digitalWrite(Reset_Hold_Pin,0);
+    
+    //Interrupts config:
+    // attachInterrupt(digitalPinToInterrupt(LBtn), LISR, CHANGE);
+    // attachInterrupt(digitalPinToInterrupt(RBtn), RISR, CHANGE);
+    // attachInterrupt(digitalPinToInterrupt(OKBtn), OKISR, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(LBtn), LISR, RISING);
+    attachInterrupt(digitalPinToInterrupt(RBtn), RISR, RISING);
+    attachInterrupt(digitalPinToInterrupt(OKBtn), OKISR, RISING);
 
+    //Check for System state:
+    Wake(); 
+
+    //Websocket Init:
     webSocket.begin(); //initiate the websocket only when there's connectivity, save resources otherwise.
     webSocket.onEvent(socketEvent);
 
+    //Display init:
     tft.init(240, 240, SPI_MODE2);
     tft.setRotation(2);
     tft.fillScreen(ST77XX_BLACK);
     tft.print("All booten'n good");
+    
+    //Greet
+    play_audio(audio_boot);
+    //Menu Init:
+        tft.fillScreen(cyan);
+        divideMenu();
+    
 }
 
+unsigned long refreshMillis;
+
 void loop() {
+    fetchIO();
+
+    renderGraphics();
+
     webSocket.loop();
     performBlink();
+    performAudioFeedback();
+    //performTone(); I programmed this because the tone function wasn't working, only to realize that that issue was the power supply for the buzzer. . .
+    
+    //fetchInputs();
 }
 
