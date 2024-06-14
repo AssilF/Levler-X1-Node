@@ -4,9 +4,8 @@
 #include <ESP8266TimerInterrupt.h> //some amazing man gave us this on github to compensate for the terribly designed timers on esp8266 . . . why is this unit this expensive comparing to esp32s price anyways >:( 
 #include <SPI.h>
 #include <Adafruit_GFX.h>
-#include <Adafruit_ST7789.h>
-#include <FS.h>
-#include <LittleFS.h>
+// #include <Adafruit_ST7789.h>
+#include <TFT_eSPI.h>
 
 
 //Note: For the analog pins since we have only one analog interface, we're gonna use an analog multiplexer I guess. . . let's hope it doesn't interfere with the US readings . . .
@@ -20,7 +19,7 @@
 #define SCR_HT   240
 #define TFT_DC    D1     // TFT DC  pin is connected to NodeMCU pin D1 (GPIO5)
 #define TFT_RST   D6     // TFT RST pin is connected to NodeMCU pin D2 (GPIO4)
-#define TFT_CS    -1     // TFT CS  pin is connected to NodeMCU pin D8 (GPIO15)
+#define TFT_CS    -1     // TFT CS  pin is not connected to anything. . .
 
 //concerning coms:
 IPAddress local_IP(4,4,4,100);
@@ -29,11 +28,17 @@ IPAddress subnet(255,255,255,0);
 const char* ssid     = "Levler@1";
 const char* password = "ASCE-123#";
 
-//Bismilah
 //Concerning Objects
-Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS,TFT_DC,TFT_RST);
+// Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS,TFT_DC,TFT_RST);
 
 WebSocketsServer webSocket = WebSocketsServer(80);
+
+TFT_eSPI tft = TFT_eSPI();
+
+TFT_eSprite heat_status = TFT_eSprite(&tft);
+TFT_eSprite battery_status = TFT_eSprite(&tft);
+TFT_eSprite lock_status = TFT_eSprite(&tft);
+TFT_eSprite gauge = TFT_eSprite(&tft); 
 
 
 //Concerning Pins:
@@ -78,7 +83,7 @@ int sound_sets[sound_IDs][sound_partitions]={
 {560},                  //scroll down 1
 {780,1290},             //inc 2
 {1290,780},             //dec 3
-{1000,760},             //boot 4
+{930,836,924,1200},             //boot 4
 {1000,840},             //shut down 5
 {560},                  //home 6
 {1033,0,1033},          //edit 7
@@ -97,7 +102,7 @@ unsigned long soundMillis[sound_IDs][sound_partitions]={
 ,{180}                      //scroll down 1
 ,{120,80}                   //inc 2
 ,{120,80}                   //dec 3
-,{300,200}                  //boot 4
+,{300,200,100,300}                  //boot 4
 ,{200,300}                  //shut down 5
 ,{160}                      //home 6
 ,{150,150,150}              //edit 7
@@ -192,23 +197,384 @@ void performTone()
     }
 }
 
-
-
 //Concerning Feedback
-double Temp;
-double EchoTime;
-double Humidity;
-bool hatch;
+double Temp; //Throw an altered readings alert when temp is too low
+double EchoTime[10]; //the system shall yield 10 samples to be averaged and filtered.
+double Humidity;//Dunno how the humidity may be interesting in such applications but hey, it comes with the DHT anyways
+bool hatch;//It'll be reported eitherway but it may not always be used for hatch purposes ig...
 
-//Concerning Menu and Actions:
-byte sensor_action_mode;
+//Concerning Display Menu and Actions:
+byte sensor_action_mode; //Real-Time, Frequent reporting, Long duration
 byte alarm_dur; //figure out what else later on
 
-
-//Concerning Display Menu:
 int page_index;
-int element_index; 
+int element_index; //Must be less CPU intensive than earlier... 
+bool io_mode=1;
+#define editing_mode 1
+#define scrolling_mode 0
 
+//Redoing a less cpu intensive IO system:
+// byte ok_count;
+// byte right_count;
+// byte left_count;
+
+unsigned long Debounce_left;
+unsigned long Debounce_right;
+unsigned long Debounce_ok; 
+
+bool confirmation = 0;
+
+IRAM_ATTR void OKISR()
+{
+    if(millis()-Debounce_ok>=120)
+    {
+        if(editing_mode)
+        {
+            play_audio(audio_button_push);
+        }
+        Debounce_ok=millis();
+    }
+} //we could reset the fetch timer here for convenience but like.  .  . cpu is weak man...
+
+IRAM_ATTR void LISR()
+{
+    if(millis()-Debounce_left>=120)
+    {
+        if(editing_mode)
+        {
+            play_audio(audio_scroll_down);
+            if(confirmation){ESP.deepSleep(0);}
+            else{confirmation=1;}
+        }
+        Debounce_left=millis();
+    }
+}
+
+IRAM_ATTR void RISR()
+{
+    if(millis()-Debounce_right>=120)
+    {
+        if(io_mode)
+        {
+            play_audio(audio_scroll_up);
+        }
+        Debounce_right=millis();
+    }
+}
+
+
+//Concerning Coms:
+uint8_t coms_status; //if I'd ever need to do something with a coms Flag
+#define cStatus_offline 0
+#define cStatus_disconnected 1
+#define cStatus_connected 2
+#define cStatus_transmission 3
+#define cStatus_Reception 4
+#define cStatus_Error 5
+String msgBuffer;
+int msgBufferIndex;
+int entryIndex;
+
+//Check if connected or not, if not, let the message to be sent on standby until connection is established again, if the sensor echoes back, move on.
+
+void socketEvent(uint8_t num,WStype_t type,uint8_t *payload,size_t length) //note: payload pointer appears to be of 8 bits, meaning this may have constrains if not used properly. just a thought of mine :)
+{
+        switch(type) //do stuff based on the socket events, that the library somewhat handles for us already
+        {
+            case WStype_DISCONNECTED:
+            play_audio(audio_disconnected);
+            coms_status=cStatus_disconnected; 
+            break;
+
+            case WStype_CONNECTED:
+            play_audio(audio_connected);
+            coms_status=cStatus_connected;
+            // Serial.println(webSocket.remoteIP(num).toString());
+            break;
+
+            case WStype_ERROR:
+            play_audio(audio_fail);
+            coms_status = cStatus_Error;
+            break;
+
+            case WStype_TEXT:
+            play_audio(audio_webCMD); //for debug purposes, since we won't be sending text I guess.
+            coms_status=cStatus_Reception;
+            msgBuffer = String((char *)payload);
+
+            Serial.println(msgBuffer);
+            webSocket.sendTXT(num, "200.00");
+            tft.println(msgBuffer);
+
+            if(msgBuffer.length()>=2)
+            {
+                if(msgBuffer.substring(0,2).equals("ss"))
+                {
+                    tft.fillScreen(TFT_WHITE);
+                    tft.fillRect(100,200,60,-msgBuffer.substring(2,4).toInt(),TFT_BLUE);
+                    tft.setCursor(20,20);
+                    tft.println("Temp:"+msgBuffer.substring(4,6));
+                    tft.println("Hum:"+msgBuffer.substring(6,8));
+                }
+            }
+        }
+}
+
+//Concerning Functions = = = = = = = = = = = = = = = = = = = = = = = ======================
+//Concerning indication
+#define wink(intensity) analogWrite(indicator,intensity)
+#define indication_sets_width 6
+
+//LED indication
+#define indicate_offline
+#define indicate_disconnection
+#define indicate_connection
+#define indicate_transmission
+#define indicate_reception
+#define indicate_error
+
+int blinkMillis[][indication_sets_width] 
+{
+    {0},
+    {0}, //disconnected
+    {100,100,200,200,100,100},//connected
+    {400,100,600,300}, //transmission
+    {0}, //reception
+    {0} //error
+};
+int blinkIntensities[][indication_sets_width]
+{
+    {0},//offline
+    {0},//disconnected
+    {200,800,2000,4000,500,0},//connected
+    {20,0,100,0},//transmission
+    {0},//reception
+    {0}//error
+}; //currently, we're not concerned with stuff other than connection status so. . . audio will do the rest.
+
+int blinkIndex;
+byte blinkMode;
+unsigned long blinkInstance;
+
+void blink(byte blinkStyle, byte blinkEase)
+{
+    if(blinkStyle != blinkMode)
+    {
+        blinkMode = blinkStyle;
+        blinkIndex = 0;
+    }
+}
+
+void performBlink()
+{
+        if(millis()-blinkInstance>= blinkMillis[blinkMode][blinkIndex])
+        {
+            wink(blinkIntensities[blinkMode][blinkIndex]);
+            blinkIndex>=indication_sets_width?blinkIndex=0:blinkIndex++;
+            blinkInstance=millis();
+        }
+}
+
+//concerning data retrieval 
+int battery_level;
+int last_battery_level;
+bool is_charging;
+unsigned long battery_monitoring_interval;
+
+void readBattery()
+{
+    if(millis()-battery_monitoring_interval>=500){
+    battery_level =  map(analogRead(Bat),0,650,0,100);
+    if(battery_level>100||last_battery_level-battery_level<-4)
+    {
+        if(battery_level>100){battery_level=100;}
+        is_charging = 1;
+        //play_audio(audio_cycle);
+    }else
+    {
+        is_charging=0;
+    }
+        last_battery_level = battery_level;
+        battery_monitoring_interval = millis();
+    }
+
+}
+
+
+//Concerning Video
+//Video core:
+#define vertical_divisions 4
+#define horizontal_divisions 5
+#define white TFT_WHITE
+#define white2 0xe7fc
+#define lime 0x07e0
+#define green 0x1346
+#define cyan TFT_CYAN
+#define blue 0x0c10
+#define lime2 0xd7f0
+#define black 0x0
+
+void divideMenu()
+{
+    tft.fillScreen(lime);
+    tft.fillRect(0,0,20,20,lime);
+    tft.fillRect(20,0,20,20,TFT_GREEN);
+    tft.fillRoundRect(0,60,180,180,4,white);
+}
+
+void drawGauge()
+{   
+}
+
+void drawButtons()
+{
+    if(page_index==0){
+    tft.fillRect(0,0,240,45,lime);
+    switch (element_index)
+    {
+    case 0:
+        tft.fillRoundRect(4,5,75,42,4,lime2);
+        tft.setCursor(7,8); tft.print("Settings");
+        tft.fillRoundRect(85,4,70,38,3,white);
+        tft.setCursor(92,8); tft.print("Overview");
+        tft.fillRoundRect(160,4,70,38,3,white);
+        tft.setCursor(167,8); tft.print("Control");
+    break;
+    case 1:
+        tft.fillRoundRect(4,4,70,38,6,white);
+        tft.setCursor(6,8); tft.print("Settings");
+        tft.fillRoundRect(80,5,75,42,4,lime2);
+        tft.setCursor(87,8); tft.print("Overview");
+        tft.fillRoundRect(160,4,70,38,6,white);
+        tft.setCursor(167,8); tft.print("Control");
+    break;
+    case 2:
+        tft.fillRoundRect(4,4,70,38,6,white);
+        tft.setCursor(6,8); tft.print("Settings");
+        tft.fillRoundRect(80,4,70,38,6,white);
+        tft.setCursor(87,8); tft.print("Overview");
+        tft.fillRoundRect(155,5,75,42,4,lime2);
+        tft.setCursor(162,8); tft.print("Control");
+    break;
+    }
+    
+    }
+}
+
+void drawIcons()
+{
+
+}
+
+
+void renderGraphics()
+{
+
+}
+
+void Hibernate() //save all the important states before hibernating//
+{
+    ESP.deepSleep(5e6);
+    yield();
+}
+
+void Wake()
+{
+
+}
+
+
+void setup() {
+
+    //Wifi Init: 
+    WiFi.setOutputPower(2.5);
+    WiFi.softAPConfig(local_IP, gateway, subnet);
+    WiFi.softAP(ssid,password,2,0,4);
+
+    pinMode(indicator,OUTPUT);
+    pinMode(OKBtn,INPUT_PULLUP);
+    pinMode(RBtn, FUNCTION_3);
+    pinMode(RBtn,INPUT_PULLUP);
+    pinMode(LBtn,INPUT_PULLUP);
+    pinMode(Buzzer,OUTPUT);
+
+    //Hold the sleep.
+    pinMode(Reset_Hold_Pin, FUNCTION_3);
+    pinMode(Reset_Hold_Pin, OUTPUT);
+    digitalWrite(Reset_Hold_Pin,0);
+    digitalWrite(indicator, 0);
+    
+    //Interrupts config:
+    attachInterrupt(digitalPinToInterrupt(LBtn), LISR, FALLING);
+    attachInterrupt(digitalPinToInterrupt(RBtn), RISR, FALLING);
+    attachInterrupt(digitalPinToInterrupt(OKBtn), OKISR, FALLING);
+
+    //Check for System state:
+
+
+    //Websocket Init:
+    webSocket.begin(); //initiate the websocket only when there's connectivity, save resources otherwise.
+    webSocket.onEvent(socketEvent);
+
+    //Display init:
+    tft.init();
+    tft.fillScreen(black);
+    tft.setTextSize(3);
+    tft.setRotation(0);
+        //tft.initDMA();
+        // tft.init(240, 240, SPI_MODE2); this works with the adafruit library, gives good speed, however, I am using the tft_espi library instead to gain time with the UX design
+        // tft.setSPISpeed(79999900);
+
+        // tft.setTextWrap(1);
+
+    
+
+    //Greet
+    tft.print("All booten'n good @");
+    play_audio(audio_boot);
+    tft.print(ESP.getCpuFreqMHz());
+    while(isSounding)
+    {
+    performAudioFeedback();
+    }
+    tft.fillScreen(black);
+    
+    //Menu Init:
+    divideMenu();
+    drawButtons();
+    
+}
+
+void loop() 
+{
+    webSocket.loop();
+    readBattery();
+    
+    // tft.setTextColor(TFT_RED,black);
+    // tft.setTextSize(8);
+    // tft.print(battery_level);
+    // tft.setCursor(20,20);
+    // tft.drawWideLine();
+
+
+    //fetchIO();
+    performAudioFeedback();
+
+    //performTone(); I programmed this because the tone function wasn't working, only to realize that that issue was the power supply for the buzzer. . .
+    //fetchInputs();
+}
+
+
+
+
+
+
+
+
+
+
+
+// Discontinued code
 
 //Concerning IO:              =========> This is a polling solution, away from interrupts as I Wanna reserve them for wifi stuff (low frequency and limited battery give us some desperate times :))
 // volatile bool OKBtn_s;
@@ -252,7 +618,7 @@ int element_index;
 //         }
 
 //         OKBtn_s=okB;
-        
+  
 //     }else
 //     {
 //         if(actFlag)
@@ -264,7 +630,6 @@ int element_index;
 //             OK_State=0;
 //         }
 //     }
-
 
 //     if(digitalRead(LBtn)!=RBtn_s)
 //     {
@@ -291,7 +656,6 @@ int element_index;
 //         }
 //     }
 
-
 //     if(digitalRead(RBtn)!=LBtn_s)
 //     {
 //         if(leftB)
@@ -316,8 +680,7 @@ int element_index;
 //         {
 //             LB_State=0;
 //         }
-        
-//     }
+//  }
 
 //     button_count>7?button_count=0:button_count++;
 //     ButtonClock = millis();
@@ -398,282 +761,34 @@ int element_index;
 
 // }
 
-//Redoing a less cpu intensive IO system:
+// void fetchIO() //you have 350ms to repress the button ;)
+// {
 
-byte ok_count;
-byte right_count;
-byte left_count;
+//         //Left Button Status
+//         switch(io_mode){
+//             case editing_mode:
+//             if(left_count>1)
+//             {
+//                 left_count=0;
+//                 play_audio(audio_scroll_up);
+//             }
 
-ICACHE_RAM_ATTR void OKISR(){ok_count++;} //we could reset the fetch timer here for convenience but like.  .  . cpu is weak man...
-ICACHE_RAM_ATTR void LISR(){left_count++;}
-ICACHE_RAM_ATTR void RISR(){right_count++;}
+//             //Right Button Status
+//             if(right_count>1)
+//             {
+//                 right_count=0;
+//                 play_audio(audio_scroll_down);
+//             }break;
+            
+//             //Ok Button Status
+//             if(ok_count>1)
+//             {
+//                 ok_count=0;
+//                 play_audio(audio_button_push);
+//             }
+//             break;
 
-unsigned long pressMillis;
-
-void fetchIO() //you have 350ms to repress the button ;)
-{
-    if(millis()-pressMillis>=400)
-    {
-
-    }
-}
-
-
-//Concerning Coms:
-uint8_t coms_status; //if I'd ever need to do something with a coms Flag
-#define cStatus_offline 0
-#define cStatus_disconnected 1
-#define cStatus_connected 2
-#define cStatus_transmission 3
-#define cStatus_Reception 4
-#define cStatus_Error 5
-String msgBuffer;
-int msgBufferIndex;
-int entryIndex;
-
-//Check if connected or not, if not, let the message to be sent on standby until connection is established again, if the sensor echoes back, move on.
-
-void socketEvent(uint8_t num,WStype_t type,uint8_t *payload,size_t length) //note: payload pointer appears to be of 8 bits, meaning this may have constrains if not used properly. just a thought of mine :)
-{
-        switch(type) //do stuff based on the socket events, that the library somewhat handles for us already
-        {
-            case WStype_DISCONNECTED:
-            play_audio(audio_disconnected);
-            coms_status=cStatus_disconnected; 
-            break;
-
-            case WStype_CONNECTED:
-            play_audio(audio_connected);
-            coms_status=cStatus_connected;
-            // Serial.println(webSocket.remoteIP(num).toString());
-            break;
-
-            case WStype_ERROR:
-            play_audio(audio_fail);
-            coms_status = cStatus_Error;
-            break;
-
-            case WStype_TEXT:
-            play_audio(audio_webCMD); //for debug purposes, since we won't be sending text I guess.
-            coms_status=cStatus_Reception;
-            msgBuffer = String((char *)payload);
-
-            Serial.println(msgBuffer);
-            webSocket.sendTXT(num, "200.00");
-            tft.println(msgBuffer);
-
-            if(msgBuffer.length()>=2)
-            {
-                if(msgBuffer.substring(0,2).equals("ss"))
-                {
-                    tft.fillScreen(ST77XX_BLUE);
-                }
-            }
-        }
-}
-
-//Concerning Functions = = = = = = = = = = = = = = = = = = = = = = = ======================
-//Concerning indication
-#define wink(intensity) analogWrite(indicator,intensity)
-#define indication_sets_width 6
-
-//LED indication
-#define indicate_offline
-#define indicate_disconnection
-#define indicate_connection
-#define indicate_transmission
-#define indicate_reception
-#define indicate_error
-
-int blinkMillis[][indication_sets_width] 
-{
-    {0},
-    {0}, //disconnected
-    {100,100,200,200,100,100},//connected
-    {400,100,600,300}, //transmission
-    {0}, //reception
-    {0} //error
-};
-int blinkIntensities[][indication_sets_width]
-{
-    {0},//offline
-    {0},//disconnected
-    {200,800,2000,4000,500,0},//connected
-    {20,0,100,0},//transmission
-    {0},//reception
-    {0}//error
-}; //currently, we're not concerned with stuff other than connection status so. . . audio will do the rest.
-int blinkPriorities[]
-{
-};
-int blinkDefaults[]
-{
-};
-
-int blinkIndex;
-byte blinkMode;
-unsigned long blinkInstance;
-
-void blink(byte blinkStyle, byte blinkEase)
-{
-    if(blinkStyle != blinkMode)
-    {
-        blinkMode = blinkStyle;
-        blinkIndex = 0;
-    }
-}
-
-void performBlink()
-{
-        if(millis()-blinkInstance>= blinkMillis[blinkMode][blinkIndex])
-        {
-            wink(blinkIntensities[blinkMode][blinkIndex]);
-            blinkIndex>4?blinkIndex=0:blinkIndex++;
-            blinkInstance=millis();
-        }
-}
-
-
-//Concerning Video
-//Video core:
-#define vertical_divisions 4
-#define horizontal_divisions 5
-#define white ST77XX_WHITE
-#define white2 0xe7fc
-#define lime 0x07e0
-#define green 0x1346
-#define cyan ST77XX_CYAN
-#define blue 0x0c10
-#define lime2 0xd7f0
-#define black ST77XX_BLACK
-
-void divideMenu()
-{
-    tft.drawFastVLine(180,45,195,green);
-    tft.drawFastHLine(0,90,240,green);
-    tft.drawFastHLine(180,135,60,green);
-    tft.drawFastHLine(180,180,60,green);
-    tft.drawFastHLine(180,225,60,green);
-    tft.fillRect(0,90,180,150,white2);
-}
-
-void drawButtons()
-{
-    if(page_index==0){
-    tft.fillRect(0,0,240,45,lime);
-    switch (element_index)
-    {
-    case 0:
-        tft.fillRoundRect(4,5,75,42,4,lime2);
-        tft.setCursor(7,8); tft.print("Settings");
-        tft.fillRoundRect(85,4,70,38,3,white);
-        tft.setCursor(92,8); tft.print("Overview");
-        tft.fillRoundRect(160,4,70,38,3,white);
-        tft.setCursor(167,8); tft.print("Control");
-    break;
-    case 1:
-        tft.fillRoundRect(4,4,70,38,6,white);
-        tft.setCursor(6,8); tft.print("Settings");
-        tft.fillRoundRect(80,5,75,42,4,lime2);
-        tft.setCursor(87,8); tft.print("Overview");
-        tft.fillRoundRect(160,4,70,38,6,white);
-        tft.setCursor(167,8); tft.print("Control");
-    break;
-    case 2:
-        tft.fillRoundRect(4,4,70,38,6,white);
-        tft.setCursor(6,8); tft.print("Settings");
-        tft.fillRoundRect(80,4,70,38,6,white);
-        tft.setCursor(87,8); tft.print("Overview");
-        tft.fillRoundRect(155,5,75,42,4,lime2);
-        tft.setCursor(162,8); tft.print("Control");
-    break;
-    }
-    
-    }
-}
-
-void drawIcons()
-{
-
-}
-
-
-void renderGraphics()
-{
-
-}
-
-void Hibernate() //save all the important states before hibernating//
-{
-    ESP.deepSleep(5e6);
-    yield();
-}
-
-void Wake()
-{
-
-}
-
-
-void setup() {
-
-    //Wifi Init:
-    WiFi.softAPConfig(local_IP, gateway, subnet);
-    WiFi.softAP(ssid,password,2,0,4);
-
-    pinMode(indicator,OUTPUT);
-    pinMode(OKBtn,INPUT_PULLUP);
-    pinMode(RBtn, FUNCTION_3);
-    pinMode(RBtn,INPUT_PULLUP);
-    pinMode(LBtn,INPUT_PULLUP);
-    pinMode(Buzzer,OUTPUT);
-
-    //Hold the sleep.
-    pinMode(Reset_Hold_Pin, FUNCTION_3);
-    pinMode(Reset_Hold_Pin, OUTPUT);
-    digitalWrite(Reset_Hold_Pin,0);
-    
-    //Interrupts config:
-    // attachInterrupt(digitalPinToInterrupt(LBtn), LISR, CHANGE);
-    // attachInterrupt(digitalPinToInterrupt(RBtn), RISR, CHANGE);
-    // attachInterrupt(digitalPinToInterrupt(OKBtn), OKISR, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(LBtn), LISR, RISING);
-    attachInterrupt(digitalPinToInterrupt(RBtn), RISR, RISING);
-    attachInterrupt(digitalPinToInterrupt(OKBtn), OKISR, RISING);
-
-    //Check for System state:
-    Wake(); 
-
-    //Websocket Init:
-    webSocket.begin(); //initiate the websocket only when there's connectivity, save resources otherwise.
-    webSocket.onEvent(socketEvent);
-
-    //Display init:
-    tft.init(240, 240, SPI_MODE2);
-    tft.setRotation(2);
-    tft.fillScreen(ST77XX_BLACK);
-    tft.print("All booten'n good");
-    
-    //Greet
-    play_audio(audio_boot);
-    //Menu Init:
-        tft.fillScreen(cyan);
-        divideMenu();
-    
-}
-
-unsigned long refreshMillis;
-
-void loop() {
-    fetchIO();
-
-    renderGraphics();
-
-    webSocket.loop();
-    performBlink();
-    performAudioFeedback();
-    //performTone(); I programmed this because the tone function wasn't working, only to realize that that issue was the power supply for the buzzer. . .
-    
-    //fetchInputs();
-}
-
+//             default:
+//             break;
+//         }
+// }
