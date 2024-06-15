@@ -6,7 +6,7 @@
 #include <Adafruit_GFX.h>
 // #include <Adafruit_ST7789.h>
 #include <TFT_eSPI.h>
-
+#include <sprites.h>
 
 //Note: For the analog pins since we have only one analog interface, we're gonna use an analog multiplexer I guess. . . let's hope it doesn't interfere with the US readings . . .
 
@@ -275,6 +275,15 @@ String msgBuffer;
 int msgBufferIndex;
 int entryIndex;
 
+struct pack
+{
+float distance;
+float humidity;
+float temperature;
+bool hatch_state;
+int battery_level;
+}data_in;
+
 //Check if connected or not, if not, let the message to be sent on standby until connection is established again, if the sensor echoes back, move on.
 
 void socketEvent(uint8_t num,WStype_t type,uint8_t *payload,size_t length) //note: payload pointer appears to be of 8 bits, meaning this may have constrains if not used properly. just a thought of mine :)
@@ -288,6 +297,7 @@ void socketEvent(uint8_t num,WStype_t type,uint8_t *payload,size_t length) //not
 
             case WStype_CONNECTED:
             play_audio(audio_connected);
+            webSocket.sendTXT(num,"Data");
             coms_status=cStatus_connected;
             // Serial.println(webSocket.remoteIP(num).toString());
             break;
@@ -298,6 +308,7 @@ void socketEvent(uint8_t num,WStype_t type,uint8_t *payload,size_t length) //not
             break;
 
             case WStype_TEXT:
+            play_audio(audio_cycle);
             play_audio(audio_webCMD); //for debug purposes, since we won't be sending text I guess.
             coms_status=cStatus_Reception;
             msgBuffer = String((char *)payload);
@@ -306,17 +317,27 @@ void socketEvent(uint8_t num,WStype_t type,uint8_t *payload,size_t length) //not
             webSocket.sendTXT(num, "200.00");
             tft.println(msgBuffer);
 
-            if(msgBuffer.length()>=2)
-            {
-                if(msgBuffer.substring(0,2).equals("ss"))
-                {
-                    tft.fillScreen(TFT_WHITE);
-                    tft.fillRect(100,200,60,-msgBuffer.substring(2,4).toInt(),TFT_BLUE);
-                    tft.setCursor(20,20);
-                    tft.println("Temp:"+msgBuffer.substring(4,6));
-                    tft.println("Hum:"+msgBuffer.substring(6,8));
-                }
-            }
+            // if(msgBuffer.length()>=2)
+            // {
+            //     if(msgBuffer.substring(0,2).equals("ss"))
+            //     {
+            //         tft.fillScreen(TFT_WHITE);
+            //         tft.fillRect(100,200,60,-msgBuffer.substring(2,4).toInt(),TFT_BLUE);
+            //         tft.setCursor(20,20);
+            //         tft.println("Temp:"+msgBuffer.substring(4,6));
+            //         tft.println("Hum:"+msgBuffer.substring(6,8));
+            //     }
+            // }
+            break;
+
+            WStype_PING:
+            play_audio(audio_boot);
+            break;
+            
+            case WStype_BIN:
+            play_audio(audio_webCMD);
+            memcpy(&data_in,payload,length);
+            break;
         }
 }
 
@@ -422,8 +443,25 @@ void divideMenu()
     tft.fillRoundRect(0,60,180,180,4,white);
 }
 
-void drawGauge()
+void drawGauge(float x)
 {   
+
+}
+
+void drawData()
+{
+    tft.setTextColor(black,white);
+    tft.setCursor(10,10);
+    tft.print("Bat:");
+    tft.println(data_in.battery_level);
+    tft.print("Dist:");
+    tft.println(data_in.distance);
+    tft.print("Hatch:");
+    tft.println(data_in.hatch_state);
+    tft.print("Humi:");
+    tft.println(data_in.humidity);
+    tft.print("Temp:");
+    tft.println(data_in.temperature);
 }
 
 void drawButtons()
@@ -519,13 +557,12 @@ void setup() {
     //Display init:
     tft.init();
     tft.fillScreen(black);
-    tft.setTextSize(3);
+    tft.setTextSize(1);
     tft.setRotation(0);
-        //tft.initDMA();
-        // tft.init(240, 240, SPI_MODE2); this works with the adafruit library, gives good speed, however, I am using the tft_espi library instead to gain time with the UX design
-        // tft.setSPISpeed(79999900);
-
-        // tft.setTextWrap(1);
+    //tft.initDMA();
+    // tft.init(240, 240, SPI_MODE2); this works with the adafruit library, gives good speed, however, I am using the tft_espi library instead to gain time with the UX design
+    // tft.setSPISpeed(79999900);
+    // tft.setTextWrap(1);
 
     
 
@@ -533,10 +570,7 @@ void setup() {
     tft.print("All booten'n good @");
     play_audio(audio_boot);
     tft.print(ESP.getCpuFreqMHz());
-    while(isSounding)
-    {
-    performAudioFeedback();
-    }
+    while(isSounding){performAudioFeedback();}
     tft.fillScreen(black);
     
     //Menu Init:
@@ -550,6 +584,8 @@ void loop()
     webSocket.loop();
     readBattery();
     
+    drawData();
+
     // tft.setTextColor(TFT_RED,black);
     // tft.setTextSize(8);
     // tft.print(battery_level);
