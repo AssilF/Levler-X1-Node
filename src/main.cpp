@@ -35,10 +35,15 @@ WebSocketsServer webSocket = WebSocketsServer(80);
 
 TFT_eSPI tft = TFT_eSPI();
 
-TFT_eSprite heat_status = TFT_eSprite(&tft);
-TFT_eSprite battery_status = TFT_eSprite(&tft);
-TFT_eSprite lock_status = TFT_eSprite(&tft);
-TFT_eSprite gauge = TFT_eSprite(&tft); 
+TFT_eSprite gauge_background = TFT_eSprite(&tft);
+TFT_eSprite gauge_pointer = TFT_eSprite(&tft);
+TFT_eSprite remote_battery_level = TFT_eSprite(&tft);
+TFT_eSprite battery_level = TFT_eSprite(&tft);
+TFT_eSprite temperature_status = TFT_eSprite(&tft);
+TFT_eSprite hatch_status = TFT_eSprite(&tft);
+TFT_eSprite coms_status = TFT_eSprite(&tft);
+TFT_eSprite audio_status = TFT_eSprite(&tft);
+TFT_eSprite alarm_status = TFT_eSprite(&tft);
 
 
 //Concerning Pins:
@@ -559,6 +564,7 @@ void setup() {
     tft.fillScreen(black);
     tft.setTextSize(1);
     tft.setRotation(0);
+    tft.setSwapBytes(1);
     //tft.initDMA();
     // tft.init(240, 240, SPI_MODE2); this works with the adafruit library, gives good speed, however, I am using the tft_espi library instead to gain time with the UX design
     // tft.setSPISpeed(79999900);
