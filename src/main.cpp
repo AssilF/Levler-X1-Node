@@ -1,18 +1,19 @@
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
 #include <WebSocketsServer.h>
-#include <ESP8266TimerInterrupt.h> //some amazing man gave us this on github to compensate for the terribly designed timers on esp8266 . . . why is this unit this expensive comparing to esp32s price anyways >:( 
+//some amazing man gave us this on github to compensate for the terribly designed timers on esp8266 . . . why is this unit this expensive comparing to esp32s price anyways >:( 
 #include <SPI.h>
 #include <Adafruit_GFX.h>
 // #include <Adafruit_ST7789.h>
 #include <TFT_eSPI.h>
 #include <sprites.h>
 
+
 //Note: For the analog pins since we have only one analog interface, we're gonna use an analog multiplexer I guess. . . let's hope it doesn't interfere with the US readings . . .
 
 //Dev Prameter:
 #define VerboseON 1
-#define debug(x) Serial.println(x); 
+#define debug(x) Serial.println(x);
 
 //Defs
 #define SCR_WD   240
@@ -22,7 +23,7 @@
 #define TFT_CS    -1     // TFT CS  pin is not connected to anything. . .
 
 //concerning coms:
-IPAddress local_IP(4,4,4,100);
+;IPAddress local_IP(4,4,4,100);
 IPAddress gateway(4,4,4,100);
 IPAddress subnet(255,255,255,0);
 const char* ssid     = "Levler@1";
@@ -35,15 +36,9 @@ WebSocketsServer webSocket = WebSocketsServer(80);
 
 TFT_eSPI tft = TFT_eSPI();
 
-TFT_eSprite gauge_background = TFT_eSprite(&tft);
-TFT_eSprite gauge_pointer = TFT_eSprite(&tft);
-TFT_eSprite remote_battery_level = TFT_eSprite(&tft);
-TFT_eSprite battery_level = TFT_eSprite(&tft);
-TFT_eSprite temperature_status = TFT_eSprite(&tft);
-TFT_eSprite hatch_status = TFT_eSprite(&tft);
-TFT_eSprite coms_status = TFT_eSprite(&tft);
-TFT_eSprite audio_status = TFT_eSprite(&tft);
-TFT_eSprite alarm_status = TFT_eSprite(&tft);
+TFT_eSprite canvas = TFT_eSprite(&tft);
+TFT_eSprite screen = TFT_eSprite(&tft);
+
 
 
 //Concerning Pins:
@@ -88,7 +83,7 @@ int sound_sets[sound_IDs][sound_partitions]={
 {560},                  //scroll down 1
 {780,1290},             //inc 2
 {1290,780},             //dec 3
-{930,836,924,1200},             //boot 4
+{444,652,866,1112},      //boot 4
 {1000,840},             //shut down 5
 {560},                  //home 6
 {1033,0,1033},          //edit 7
@@ -107,7 +102,7 @@ unsigned long soundMillis[sound_IDs][sound_partitions]={
 ,{180}                      //scroll down 1
 ,{120,80}                   //inc 2
 ,{120,80}                   //dec 3
-,{300,200,100,300}                  //boot 4
+,{150,100,50,400}                  //boot 4
 ,{200,300}                  //shut down 5
 ,{160}                      //home 6
 ,{150,150,150}              //edit 7
@@ -120,8 +115,8 @@ unsigned long soundMillis[sound_IDs][sound_partitions]={
 ,{500,400,300}              //Disconnected 14
 ,{200}                      //Coms 15
 };                
-                                  
-byte sound_set_width[sound_IDs] = {1,1,2,2,2,2,1,3,2,5,3,5,3,2,2,1};
+                    
+byte sound_set_width[sound_IDs] = {1,1,2,2,4,2,1,3,2,5,3,5,3,2,2,1};
 byte sound_priority[sound_IDs]; //later to be implemented, which sound cancels which :)
 bool isSounding;
 unsigned long sound_partition_reference;
@@ -203,14 +198,14 @@ void performTone()
 }
 
 //Concerning Feedback
-double Temp; //Throw an altered readings alert when temp is too low
-double EchoTime[10]; //the system shall yield 10 samples to be averaged and filtered.
-double Humidity;//Dunno how the humidity may be interesting in such applications but hey, it comes with the DHT anyways
-bool hatch;//It'll be reported eitherway but it may not always be used for hatch purposes ig...
+//double Temp; //Throw an altered readings alert when temp is too low
+//double EchoTime[10]; //the system shall yield 10 samples to be averaged and filtered.
+//double Humidity;//Dunno how the humidity may be interesting in such applications but hey, it comes with the DHT anyways
+//bool hatch;//It'll be reported eitherway but it may not always be used for hatch purposes ig...
 
 //Concerning Display Menu and Actions:
-byte sensor_action_mode; //Real-Time, Frequent reporting, Long duration
-byte alarm_dur; //figure out what else later on
+//byte sensor_action_mode; //Real-Time, Frequent reporting, Long duration
+//byte alarm_dur; //figure out what else later on
 
 int page_index;
 int element_index; //Must be less CPU intensive than earlier... 
@@ -282,12 +277,13 @@ int entryIndex;
 
 struct pack
 {
-float distance;
-float humidity;
-float temperature;
-bool hatch_state;
-int battery_level;
+float distance=0.0;
+float humidity=0.0;
+float temperature=0.0;
+bool hatch_state=1;
+int battery_level=0;
 }data_in;
+
 
 //Check if connected or not, if not, let the message to be sent on standby until connection is established again, if the sensor echoes back, move on.
 
@@ -313,14 +309,14 @@ void socketEvent(uint8_t num,WStype_t type,uint8_t *payload,size_t length) //not
             break;
 
             case WStype_TEXT:
-            play_audio(audio_cycle);
-            play_audio(audio_webCMD); //for debug purposes, since we won't be sending text I guess.
-            coms_status=cStatus_Reception;
-            msgBuffer = String((char *)payload);
+            // play_audio(audio_cycle);
+            // play_audio(audio_webCMD); //for debug purposes, since we won't be sending text I guess.
+            // coms_status=cStatus_Reception;
+            // msgBuffer = String((char *)payload);
 
-            Serial.println(msgBuffer);
-            webSocket.sendTXT(num, "200.00");
-            tft.println(msgBuffer);
+            // Serial.println(msgBuffer);
+            // webSocket.sendTXT(num, "200.00");
+            // tft.println(msgBuffer);
 
             // if(msgBuffer.length()>=2)
             // {
@@ -340,7 +336,7 @@ void socketEvent(uint8_t num,WStype_t type,uint8_t *payload,size_t length) //not
             break;
             
             case WStype_BIN:
-            play_audio(audio_webCMD);
+            // play_audio(audio_webCMD);
             memcpy(&data_in,payload,length);
             break;
         }
@@ -359,47 +355,47 @@ void socketEvent(uint8_t num,WStype_t type,uint8_t *payload,size_t length) //not
 #define indicate_reception
 #define indicate_error
 
-int blinkMillis[][indication_sets_width] 
-{
-    {0},
-    {0}, //disconnected
-    {100,100,200,200,100,100},//connected
-    {400,100,600,300}, //transmission
-    {0}, //reception
-    {0} //error
-};
-int blinkIntensities[][indication_sets_width]
-{
-    {0},//offline
-    {0},//disconnected
-    {200,800,2000,4000,500,0},//connected
-    {20,0,100,0},//transmission
-    {0},//reception
-    {0}//error
-}; //currently, we're not concerned with stuff other than connection status so. . . audio will do the rest.
+// int blinkMillis[][indication_sets_width] 
+// {
+//     {0},
+//     {0}, //disconnected
+//     {100,100,200,200,100,100},//connected
+//     {400,100,600,300}, //transmission
+//     {0}, //reception
+//     {0} //error
+// };
+// int blinkIntensities[][indication_sets_width]
+// {
+//     {0},//offline
+//     {0},//disconnected
+//     {200,800,2000,4000,500,0},//connected
+//     {20,0,100,0},//transmission
+//     {0},//reception
+//     {0}//error
+// }; //currently, we're not concerned with stuff other than connection status so. . . audio will do the rest.
 
-int blinkIndex;
-byte blinkMode;
-unsigned long blinkInstance;
+// int blinkIndex;
+// byte blinkMode;
+// unsigned long blinkInstance;
 
-void blink(byte blinkStyle, byte blinkEase)
-{
-    if(blinkStyle != blinkMode)
-    {
-        blinkMode = blinkStyle;
-        blinkIndex = 0;
-    }
-}
+// void blink(byte blinkStyle, byte blinkEase)
+// {
+//     if(blinkStyle != blinkMode)
+//     {
+//         blinkMode = blinkStyle;
+//         blinkIndex = 0;
+//     }
+// }
 
-void performBlink()
-{
-        if(millis()-blinkInstance>= blinkMillis[blinkMode][blinkIndex])
-        {
-            wink(blinkIntensities[blinkMode][blinkIndex]);
-            blinkIndex>=indication_sets_width?blinkIndex=0:blinkIndex++;
-            blinkInstance=millis();
-        }
-}
+// void performBlink()
+// {
+//         if(millis()-blinkInstance>= blinkMillis[blinkMode][blinkIndex])
+//         {
+//             wink(blinkIntensities[blinkMode][blinkIndex]);
+//             blinkIndex>=indication_sets_width?blinkIndex=0:blinkIndex++;
+//             blinkInstance=millis();
+//         }
+// }
 
 //concerning data retrieval 
 int battery_level;
@@ -440,79 +436,347 @@ void readBattery()
 #define lime2 0xd7f0
 #define black 0x0
 
-void divideMenu()
+#define first_quadron 0
+#define second_quadron 1
+#define third_quadron 2
+#define fourth_quadron 3
+
+byte current_quadron;
+int relative_x;
+int relative_y;
+
+void divideMenu() //call this on page change only because apparently it doesn't affect the screen much. . .;
 {
-    tft.fillScreen(lime);
-    tft.fillRect(0,0,20,20,lime);
-    tft.fillRect(20,0,20,20,TFT_GREEN);
-    tft.fillRoundRect(0,60,180,180,4,white);
-}
-
-void drawGauge(float x)
-{   
+    screen.fillSprite(lime);
+    screen.fillRoundRect(-relative_x,35-relative_y,205,205,4,white);
 
 }
+
+#define drawFilledCircle(x,y,r,c) screen.fillCircle(x-relative_x,y-relative_y,r,c)
+#define drawRelativeArc(x,y,r1,r2,a1,a2,c1,c2) screen.drawArc(x-relative_x,y-relative_y,r1,r2,a1,a2,c1,c2)
+#define setRelativeCursor(x,y) screen.setCursor(x-relative_x,y-relative_y)
+#define calculateAngle(input) mapfloat(constrain(input,dead_zone,max_voulume),dead_zone,max_voulume,min_gauge_angle,max_gauge_angle)
+#define drawRelativeString(s,x,y) screen.drawString(s,x-relative_x,y-relative_y,font)
+#define gauge_radius 100
+#define gauge_position_x 103
+#define gauge_position_y 180
+#define gauge_internal_radius 80
+#define max_gauge_angle 315
+#define min_gauge_angle 45 //(degrees)
+#define gauge_percentage_size 4
+#define gauge_volume_size 2
+#define gauge_diff_size 2
+
+//configurations:
+float max_voulume=1000;
+float dead_zone=200; 
+float volume;
+
+float mapfloat(long x, long in_min, long in_max, long out_min, long out_max)
+{
+  return (float)(x - in_min) * (out_max - out_min) / (float)(in_max - in_min) + out_min;
+}
+
+void drawGauge() //push this @ render state 1
+{
+    drawFilledCircle(gauge_position_x,gauge_position_y,gauge_radius,TFT_DARKCYAN);
+    drawFilledCircle(gauge_position_x,gauge_position_y,gauge_internal_radius,TFT_GREENYELLOW);
+    drawRelativeArc(gauge_position_x,gauge_position_y,gauge_radius,gauge_internal_radius,min_gauge_angle,calculateAngle(volume),TFT_GREEN,TFT_DARKCYAN);
+    
+    screen.setTextSize(5);
+    screen.setTextDatum(4);
+    screen.setTextColor(black);
+    setRelativeCursor(60,151);
+    screen.print(map(volume,dead_zone,max_voulume,0,100));
+    screen.print("%");
+
+    // screen.fillSprite(0);
+    // screen.fillSmoothCircle(101,101,101,TFT_DARKCYAN);
+    // screen.fillSmoothCircle(17+84,19+84,84,TFT_GREEN);
+    // screen.setPivot(85,85);
+    // canvas.fillSprite(TFT_TRANSPARENT);
+    // canvas.drawWedgeLine(30,60,30,0,10,40,TFT_RED);
+    // canvas.pushRotated(&screen,0,TFT_TRANSPARENT);
+    // screen.drawArc(101,101,102,85,60,120,TFT_GREENYELLOW,1);
+    // screen.setCursor(70,85);
+    // screen.setTextColor(black,TFT_GREEN);
+    // screen.setTextSize(5);
+    // screen.print("20%");
+    // screen.pushSprite(0,80,0);
+    // yield();
+}
+
+
+unsigned long render_time;
+
+void drawDebugData()
+{
+    if(current_quadron==first_quadron){
+    screen.setTextSize(1);
+    screen.setTextColor(black,white);
+    screen.setTextWrap(0,0);
+    screen.setCursor(10-relative_x,10-relative_y);
+    screen.print("Bat:");
+    screen.println(data_in.battery_level);
+    screen.print("Dist:");
+    screen.println(data_in.distance);
+    screen.print("Hatch:");
+    screen.println(data_in.hatch_state);
+    screen.print("Humi:");
+    screen.println(data_in.humidity);
+    screen.print("Temp:");
+    screen.println(data_in.temperature);
+    screen.print("Free heap:");
+    screen.println(system_get_free_heap_size());
+    screen.print("render time:");
+    screen.print(render_time);
+    }
+}
+
+byte data_display_mode;
+#define gauge_mode 0
+#define dial_mode 1 
+#define meter_mode 2
+#define reservoir_mode 3 
+#define seven_segment_mode 4
+#define level_mode 5 
+#define cubic_mode 6 //still experimenting with 3D transform and projection matrices 
 
 void drawData()
 {
-    tft.setTextColor(black,white);
-    tft.setCursor(10,10);
-    tft.print("Bat:");
-    tft.println(data_in.battery_level);
-    tft.print("Dist:");
-    tft.println(data_in.distance);
-    tft.print("Hatch:");
-    tft.println(data_in.hatch_state);
-    tft.print("Humi:");
-    tft.println(data_in.humidity);
-    tft.print("Temp:");
-    tft.println(data_in.temperature);
-}
-
-void drawButtons()
-{
-    if(page_index==0){
-    tft.fillRect(0,0,240,45,lime);
-    switch (element_index)
+    switch(data_display_mode)
     {
-    case 0:
-        tft.fillRoundRect(4,5,75,42,4,lime2);
-        tft.setCursor(7,8); tft.print("Settings");
-        tft.fillRoundRect(85,4,70,38,3,white);
-        tft.setCursor(92,8); tft.print("Overview");
-        tft.fillRoundRect(160,4,70,38,3,white);
-        tft.setCursor(167,8); tft.print("Control");
-    break;
-    case 1:
-        tft.fillRoundRect(4,4,70,38,6,white);
-        tft.setCursor(6,8); tft.print("Settings");
-        tft.fillRoundRect(80,5,75,42,4,lime2);
-        tft.setCursor(87,8); tft.print("Overview");
-        tft.fillRoundRect(160,4,70,38,6,white);
-        tft.setCursor(167,8); tft.print("Control");
-    break;
-    case 2:
-        tft.fillRoundRect(4,4,70,38,6,white);
-        tft.setCursor(6,8); tft.print("Settings");
-        tft.fillRoundRect(80,4,70,38,6,white);
-        tft.setCursor(87,8); tft.print("Overview");
-        tft.fillRoundRect(155,5,75,42,4,lime2);
-        tft.setCursor(162,8); tft.print("Control");
-    break;
+        case gauge_mode:
+        drawGauge();
+        break;
+
+        case dial_mode:
+        break;
+
+        default:
+        drawGauge();
+        break;
     }
+}
+
+#define battery_icon_height 38
+#define battery_icon_width 60
+#define battery_icon_x 180
+#define battery_icon_y 0
+
+#define humidity_icon_height 55
+#define humidity_icon_width 29
+#define humidity_icon_x 87
+#define humidity_icon_y 36
+
+#define temp_icon_width 60
+#define temp_icon_height 65
+#define temp_icon_x 6
+#define temp_icon_y 30
+#define temp_text_size 3
+#define temp_text_x 2
+#define temp_text_y 68
+
+#define page_text_size 3 //good idea to break down the < > arrows and put them in a box
+#define page_text_x 0
+#define page_text_y 1
+
+#define remote_battery_width 44
+#define remote_battery_height 28
+#define remote_battery_x 158
+#define remote_battery_y 49
+
+#define host_name_size 1
+#define host_name_x 158
+#define host_name_y 36
+
+#define coms_icon_width 34
+#define coms_icon_height 36
+#define coms_icon_x 206
+#define coms_icon_y 41
+
+#define padlock_icon_width 60
+#define padlock_icon_height 60
+#define padlock_icon_x 204
+#define padlock_icon_y 99
+
+#define output_icon_width 38
+#define output_icon_height 50
+#define output_icon_x 206
+#define output_icon_y 168
+#define output_condition_size 1
+#define output_conidition_x 201
+#define output_condition_y 223
+
+#define bell_icon_width 60
+#define bell_icon_height 55
+#define bell_icon_x 113
+#define bell_icon_y 36
+
+byte icon_index=0;
+
+void drawIcons() //a side note, find a way to only update icons whenever there's need for it, each millisecond counts.
+{ //don't forget to make these draw calls called one at a time each cycle to not put too much strain on the CPU and elongate the frame render time. . .
+    //Drawing Temp Status (Add a third state maybe)
+    // switch (icon_index)
+    // {
+    // case 1:
+            canvas.fillSprite(TFT_BLACK);
+    canvas.pushImage(0,0,temp_icon_width,temp_icon_height,data_in.temperature>8?heat_icon:freeze_icon);
+    canvas.pushToSprite(&screen,temp_icon_x-relative_x,temp_icon_y-relative_y,TFT_BLACK);
+    //     break;
     
+    // case 2:
+        //Drawing coms status
+    if(coms_status==cStatus_connected)
+    {
+        canvas.fillSprite(TFT_BLACK);
+        canvas.pushImage(0,0,coms_icon_width,coms_icon_height,coms_icon);
+        canvas.pushToSprite(&screen,coms_icon_x-relative_x,coms_icon_y-relative_y,TFT_BLACK);
     }
+
+// break;
+
+//     case 3:
+        //Drawing battery status
+    canvas.fillSprite(TFT_BLACK);
+    screen.fillRect(battery_icon_x-relative_x,battery_icon_y-relative_y,battery_icon_width,battery_icon_height,TFT_DARKGREY);
+    screen.fillRect(battery_icon_x+map(battery_level,0,100,battery_icon_width,0)-relative_x,battery_icon_y-relative_y,map(battery_level,0,100,0,battery_icon_width)
+    ,battery_icon_height,TFT_GOLD);
+
+
+    canvas.pushImage(0,0,battery_icon_width,battery_icon_height,battery_icon);
+    canvas.pushToSprite(&screen,battery_icon_x-relative_x,battery_icon_y-relative_y,TFT_BLACK);
+//don't forget to add percentage text
+
+// break;
+
+//     case 4:
+        //Drawing remote battery status
+    canvas.fillSprite(TFT_BLACK);
+    screen.fillRect(remote_battery_x-relative_x,remote_battery_y-relative_y,remote_battery_width,remote_battery_height,TFT_DARKGREY);
+    screen.fillRect(remote_battery_x+map(data_in.battery_level,0,100,remote_battery_width,0)-relative_x,remote_battery_y-relative_y,map(data_in.battery_level,0,100,0,remote_battery_width)
+    ,remote_battery_height,TFT_GOLD);
+
+    canvas.pushImage(0,0,remote_battery_width,remote_battery_height,remote_battery_icon);
+    canvas.pushToSprite(&screen,remote_battery_x-relative_x,remote_battery_y-relative_y,TFT_BLACK);
+//don't forget to add percentage text
+
+// break;
+
+//     case 5:
+        //drawing padlock:
+    canvas.fillSprite(TFT_BLACK);
+    canvas.pushImage(0,0,padlock_icon_width,padlock_icon_height,data_in.hatch_state?lock_open_icon:lock_icon);
+    canvas.pushToSprite(&screen,padlock_icon_x-relative_x,padlock_icon_y-relative_y,TFT_BLACK);
+
+// break;
+
+//     case 6:
+    
+    //drawing humidity status:
+    canvas.fillSprite(TFT_BLACK);
+    canvas.pushImage(0,0,humidity_icon_width,humidity_icon_height,humidity_icon);
+    canvas.pushToSprite(&screen,humidity_icon_x-relative_x,humidity_icon_y-relative_y,TFT_BLACK);
+
+// break;
+
+//     case 7:
+    
+    //drawing bell status: (this is reserved for when we build the alert engine)
+    canvas.fillSprite(TFT_BLACK);
+    canvas.pushImage(0,0,bell_icon_width,bell_icon_height,alert_icon);
+    canvas.pushToSprite(&screen,bell_icon_x-relative_x,bell_icon_y-relative_y,TFT_BLACK);
+
+// break;
+
+//     case 8:
+        //drawing button: (reserved for output)
+    screen.pushImage(output_icon_x-relative_x,output_icon_y-relative_y,output_icon_width,output_icon_height,output_on_icon);
+
+// break;
+
+//     case 9:
+
+//     break;
+//     }
+//     icon_index++;
 }
 
-void drawIcons()
-{
-
-}
-
-
+unsigned long render_time_reference;
+byte render_index;
 void renderGraphics()
 {
+    switch(current_quadron) //offset everything on the screen;
+    {
+        case first_quadron:
+            relative_x = 0;
+            relative_y = 0;
+        break;
 
+        case second_quadron:
+            relative_x = 120;
+            relative_y = 0;
+        break;
+
+        case third_quadron:
+            relative_x = 0;
+            relative_y = 120;
+        break;
+
+        case fourth_quadron:
+            relative_x = 120;
+            relative_y = 120;
+        break;
+    }
+    //Put what to be rendered here
+    if(current_quadron==first_quadron){render_time_reference = millis();}
+    screen.fillSprite(TFT_TRANSPARENT);
+    divideMenu();
+    drawIcons();
+    webSocket.loop(); //to avoid freezing that stuff
+    drawDebugData();
+    drawData();
+    webSocket.loop();
+    //end of what to be rendered
+    current_quadron>=fourth_quadron?current_quadron=first_quadron:current_quadron++; //increment the index of the quadron for next render iteration.
+    screen.pushSprite(relative_x,relative_y,TFT_TRANSPARENT);
+    if(current_quadron==first_quadron){render_time= millis()-render_time_reference;}
+}
+
+void render_greet()
+{
+    for(int i=0;i<4;i++){
+    screen.fillSprite(TFT_BLACK);
+    switch(current_quadron) //offset everything on the screen;
+    {
+        case first_quadron:
+            relative_x = 0;
+            relative_y = 0;
+        screen.setTextColor(TFT_GREEN,TFT_BLACK);
+        screen.print("All booten'n good @");
+        screen.print(ESP.getCpuFreqMHz());
+        break;
+
+        case second_quadron:
+            relative_x = 120;
+            relative_y = 0;
+        break;
+
+        case third_quadron:
+            relative_x = 0;
+            relative_y = 120;
+        break;
+
+        case fourth_quadron:
+            relative_x = 120;
+            relative_y = 120;
+        break;
+    }
+    screen.pushImage(-relative_x,60-relative_y,240,120,ufas1_logo);
+    screen.pushSprite(relative_x,relative_y,TFT_BLACK);
+    current_quadron++;
+    }
 }
 
 void Hibernate() //save all the important states before hibernating//
@@ -521,16 +785,10 @@ void Hibernate() //save all the important states before hibernating//
     yield();
 }
 
-void Wake()
-{
-
-}
-
 
 void setup() {
 
     //Wifi Init: 
-    WiFi.setOutputPower(2.5);
     WiFi.softAPConfig(local_IP, gateway, subnet);
     WiFi.softAP(ssid,password,2,0,4);
 
@@ -561,276 +819,49 @@ void setup() {
 
     //Display init:
     tft.init();
-    tft.fillScreen(black);
+    tft.fillScreen(white);
     tft.setTextSize(1);
     tft.setRotation(0);
-    tft.setSwapBytes(1);
-    //tft.initDMA();
-    // tft.init(240, 240, SPI_MODE2); this works with the adafruit library, gives good speed, however, I am using the tft_espi library instead to gain time with the UX design
-    // tft.setSPISpeed(79999900);
-    // tft.setTextWrap(1);
-
-    
+    screen.setColorDepth(8);//Quadrons mode to free some heap ig . . . 
+    screen.createSprite(120,120);
+    canvas.setColorDepth(16); //maybe come up with better names for screen and canvas next time . . . :)
+    canvas.createSprite(60,65); //this should cover most sprites we're gonna be adding onto the screen.
+    canvas.setSwapBytes(1);
 
     //Greet
-    tft.print("All booten'n good @");
+    render_greet();
     play_audio(audio_boot);
-    tft.print(ESP.getCpuFreqMHz());
     while(isSounding){performAudioFeedback();}
     tft.fillScreen(black);
     
-    //Menu Init:
-    divideMenu();
-    drawButtons();
-    
+    //Finalizing
 }
+
+unsigned long unfreezing_reference;
+bool test_bool;
 
 void loop() 
 {
     webSocket.loop();
-    readBattery();
-    
-    drawData();
+    volume=data_in.distance;
+    renderGraphics();
+    yield();
+    // if(millis()-unfreezing_reference>=30)
+    // {
+    //     // if(test_bool)
+    //     // {
+    //     //     volume+=20;
+    //     // }else{volume-=45;}
+    //     // if(volume>=max_voulume)
+    //     // {
+    //     //     test_bool = 0;
+    //     // }
+    //     // if(volume<=dead_zone)
+    //     // {
+    //     //     test_bool=1;
+    //     // }
+    //     // unfreezing_reference=millis();
+    // }
 
-    // tft.setTextColor(TFT_RED,black);
-    // tft.setTextSize(8);
-    // tft.print(battery_level);
-    // tft.setCursor(20,20);
-    // tft.drawWideLine();
-
-
-    //fetchIO();
     performAudioFeedback();
-
-    //performTone(); I programmed this because the tone function wasn't working, only to realize that that issue was the power supply for the buzzer. . .
-    //fetchInputs();
 }
-
-
-
-
-
-
-
-
-
-
-
-// Discontinued code
-
-//Concerning IO:              =========> This is a polling solution, away from interrupts as I Wanna reserve them for wifi stuff (low frequency and limited battery give us some desperate times :))
-// volatile bool OKBtn_s;
-// volatile bool LBtn_s;
-// volatile bool RBtn_s; //I don't wanna use enums to keep things simple here.  . .
-
-// #define pressed 1
-// #define held_down 2
-// #define released 3
-
-// volatile byte LB_State;
-// volatile byte RB_State;
-// volatile byte OK_State;
-
-// unsigned int ButtonClock;
-// byte button_count;
-
-// #define okB digitalRead(OKBtn)
-// #define leftB digitalRead(LBtn)
-// #define rigthB digitalRead(RBtn)
-
-//volatile bool actFlag=0; //The fetch function can be broken into 3 parts for each pin and turned into an ISR to save power, however, this may introduce unpredictable wifi behaviour which may in turn toss energy around, this is just a theory though so, determining this later on if I liberate enough time for this project
-
-
-//No longer used (Polling mode)
-// void fetchInputs() //I am not gonna focus on optimizing this code so much because time is running out for the rest of this project, COMS and SENSING
-// {
-    
-//     if(millis()-ButtonClock>=80){
-
-//     if(digitalRead(OKBtn)!=OKBtn_s)
-//     {
-//         if(okB)
-//         {
-//         OK_State=released;
-//         actFlag = 0;
-//         }else
-//         {
-//         OK_State=pressed;
-//         actFlag = 1;
-//         }
-
-//         OKBtn_s=okB;
-  
-//     }else
-//     {
-//         if(actFlag)
-//         {
-//             if(button_count>=7){
-//             OK_State=held_down;}
-//         }else
-//         {
-//             OK_State=0;
-//         }
-//     }
-
-//     if(digitalRead(LBtn)!=RBtn_s)
-//     {
-//         if(rigthB)
-//         {
-//         RB_State=released;
-//         actFlag = 0;
-//         }else
-//         {
-//         RB_State=pressed;    
-//         actFlag = 1;
-//         }
-
-//         RBtn_s=rigthB;
-//     }else
-//     {
-//         if(actFlag)
-//         {   
-//             if(button_count>=7){
-//             RB_State=held_down;}
-//         }else
-//         {
-//             RB_State=0;
-//         }
-//     }
-
-//     if(digitalRead(RBtn)!=LBtn_s)
-//     {
-//         if(leftB)
-//         {
-//         LB_State=released;
-//         actFlag = 0;
-//         button_count=0;
-//         }else
-//         {
-//         LB_State=pressed;
-//         actFlag = 1;
-//         }
-//         LBtn_s=leftB;
-//     }else
-//     {
-        
-//         if(actFlag)
-//         {
-//             if(button_count>=7){
-//             LB_State=held_down;}
-//         }else
-//         {
-//             LB_State=0;
-//         }
-//  }
-
-//     button_count>7?button_count=0:button_count++;
-//     ButtonClock = millis();
-//     }
-// }
-
-
-// unsigned long fetchMillis;
-// unsigned long fetchInterval = 500;
-
-// // int okBtnCNT;
-// // int leftBtnCNT;
-// // int rightBtnCNT;
-
-// volatile unsigned long lMillis;
-// volatile unsigned long rMillis;
-// volatile unsigned long okMillis;
-
-// ICACHE_RAM_ATTR void OKISR()
-// {   
-//     if(millis()-okMillis>=20){
-//     actFlag=1;
-//     if(okB){OK_State=released;}else{ OK_State=pressed;OKBtn_s=1;}
-
-//     okMillis=millis();
-//     }
-// }
-
-// ICACHE_RAM_ATTR void LISR()
-// {
-//     if(millis()-lMillis>=20){
-//     actFlag=1;
-//     if(leftB){LB_State=released;} else{LB_State=pressed;LBtn_s=1;}
-//     lMillis=millis();
-//     }
-// }
-
-// ICACHE_RAM_ATTR void RISR()
-// {
-//     if(millis()-rMillis>=20){
-//     actFlag=1;
-//     if(rigthB){RB_State=released;}else{ RB_State=pressed;RBtn_s=1;}
-//     rMillis=millis();
-//     }
-// }
-
-
-// void fetchPresses()
-// {
-
-//     if(actFlag)
-//     {
-//         actFlag=0;
-//         fetchMillis=millis();
-//         fetchInterval=1000;
-//     }
-
-//     if(millis()-fetchMillis>=fetchInterval)
-//     {
-//     fetchMillis=millis();
-//     fetchInterval=100;
-
-//     if(OKBtn_s && !okB)
-//     {
-//         OK_State=held_down;
-//     }
-
-//     if(RBtn_s && !rigthB)
-//     {
-//         RB_State=held_down;
-//     }
-
-//     if(LBtn_s&& !leftB)
-//     {
-//         LB_State=held_down;
-//     }
-//     }
-
-// }
-
-// void fetchIO() //you have 350ms to repress the button ;)
-// {
-
-//         //Left Button Status
-//         switch(io_mode){
-//             case editing_mode:
-//             if(left_count>1)
-//             {
-//                 left_count=0;
-//                 play_audio(audio_scroll_up);
-//             }
-
-//             //Right Button Status
-//             if(right_count>1)
-//             {
-//                 right_count=0;
-//                 play_audio(audio_scroll_down);
-//             }break;
-            
-//             //Ok Button Status
-//             if(ok_count>1)
-//             {
-//                 ok_count=0;
-//                 play_audio(audio_button_push);
-//             }
-//             break;
-
-//             default:
-//             break;
-//         }
-// }
